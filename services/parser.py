@@ -13,8 +13,10 @@ from models.schemas import Transaction, TransactionType
 DATE_ALIASES = {"fecha", "date", "día", "dia", "f.valor", "f.transac"}
 DESC_ALIASES = {"descripcion", "descripción", "concepto", "detalle", "descripci", "detail", "glosa"}
 AMOUNT_ALIASES = {"monto", "valor", "importe", "amount", "total"}
-DEBIT_ALIASES = {"debito", "débito", "cargo", "egreso", "salida", "debit"}
-CREDIT_ALIASES = {"credito", "crédito", "abono", "ingreso", "entrada", "credit"}
+DEBIT_ALIASES = {"debito", "débito", "cargo", "egreso", "salida", "debit", "valor débito", "valor debito"}
+CREDIT_ALIASES = {"credito", "crédito", "abono", "ingreso", "entrada", "credit", "valor crédito", "valor credito"}
+
+PAGO_TC_KEYWORDS = ("pago a la tarjeta", "gracias por su pago")
 TYPE_ALIASES = {"tipo", "type", "movimiento", "operacion", "operación"}
 
 
@@ -90,12 +92,12 @@ def parse_xls(file_bytes: bytes) -> List[Transaction]:
 
         # Determine amount and type
         if debit_col and credit_col:
-            debit_val = _parse_amount(row[debit_col])
-            credit_val = _parse_amount(row[credit_col])
-            if debit_val and debit_val > 0:
+            debit_val = abs(_parse_amount(row[debit_col]))
+            credit_val = abs(_parse_amount(row[credit_col]))
+            if debit_val > 0:
                 monto = debit_val
                 tipo = TransactionType.debit
-            elif credit_val and credit_val > 0:
+            elif credit_val > 0:
                 monto = credit_val
                 tipo = TransactionType.credit
             else:
@@ -115,8 +117,14 @@ def parse_xls(file_bytes: bytes) -> List[Transaction]:
         else:
             continue
 
+        # Pagos a tarjeta de crédito → crédito con categoría fija
+        categoria = None
+        if any(kw in descripcion.lower() for kw in PAGO_TC_KEYWORDS):
+            tipo = TransactionType.credit
+            categoria = "Pagos TC"
+
         transactions.append(
-            Transaction(fecha=fecha, descripcion=descripcion, monto=monto, tipo=tipo)
+            Transaction(fecha=fecha, descripcion=descripcion, monto=monto, tipo=tipo, categoria=categoria)
         )
 
     return transactions

@@ -190,7 +190,12 @@ def _clean_amount(raw: str) -> float:
 def _parse_global66(full_text: str) -> List[Transaction]:
     transactions = []
 
-    for line in full_text.splitlines():
+    print(f"Texto crudo primeros 500 chars: {full_text[:500]}")
+    lines = full_text.splitlines()
+    print(f"Total líneas extraídas: {len(lines)}")
+    print(f"Primeras 5 líneas: {lines[:5]}")
+
+    for line in lines:
         line = line.strip()
         if not line:
             continue
@@ -198,6 +203,8 @@ def _parse_global66(full_text: str) -> List[Transaction]:
         # Must start with a date
         if not _GLOBAL66_DATE.match(line):
             continue
+
+        print(f"Procesando línea: {line}")
 
         fecha_str = line[:10]
         fecha = _parse_date(fecha_str)
@@ -254,9 +261,9 @@ def _parse_global66(full_text: str) -> List[Transaction]:
             tipo = TransactionType.credit
             categoria = "Pagos TC"
 
-        transactions.append(
-            Transaction(fecha=fecha, descripcion=descripcion, monto=monto, tipo=tipo, categoria=categoria)
-        )
+        transaction = Transaction(fecha=fecha, descripcion=descripcion, monto=monto, tipo=tipo, categoria=categoria)
+        print(f"Transacción encontrada: {transaction}")
+        transactions.append(transaction)
 
     return transactions
 

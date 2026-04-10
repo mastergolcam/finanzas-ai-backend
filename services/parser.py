@@ -64,25 +64,34 @@ def _pdf_to_text(file_bytes: bytes) -> str:
     return "\n".join(page_texts)
 
 
-def _call_claude(text: str) -> List[Transaction]:
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    prompt = PROMPT.format(texto=text)
+CHUNK_SIZE = 3000
 
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
 
-    raw = message.content[0].text.strip()
+def _parse_claude_response(raw: str) -> List[dict]:
+    # 1. Clean markdown fences
+    cleaned = raw.replace("```json", "").replace("```", "").strip()
 
-    # Strip markdown fences if present
-    if raw.startswith("```"):
-        import re
-        raw = re.sub(r"```[a-z]*\n?", "", raw).strip("` \n")
+    print(f"Respuesta Claude primeros 500 chars: {cleaned[:500]}")
 
-    items = json.loads(raw)
+    # 2. Try direct parse
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
 
+    # 3. Extract array with regex fallback
+    import re
+    match = re.search(r"\[.*\]", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return []
+
+
+def _items_to_transactions(items: List[dict]) -> List[Transaction]:
     transactions = []
     for item in items:
         raw_date = item.get("date", "")
@@ -110,8 +119,52 @@ def _call_claude(text: str) -> List[Transaction]:
                 tipo=tipo,
             )
         )
-
     return transactions
+
+
+def _call_claude_chunk(client: anthropic.Anthropic, text: str) -> List[Transaction]:
+    prompt = PROMPT.format(texto=text)
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = message.content[0].text
+    items = _parse_claude_response(raw)
+
+    if not items:
+        print("Reintentando chunk...")
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        items = _parse_claude_response(message.content[0].text)
+
+    return _items_to_transactions(items)
+
+
+def _split_chunks(text: str, chunk_size: int = CHUNK_SIZE) -> List[str]:
+    """Split text into chunks at newline boundaries to avoid cutting mid-transaction."""
+    chunks = []
+    lines = text.splitlines(keepends=True)
+    current = []
+    current_len = 0
+
+    for line in lines:
+        if current_len + len(line) > chunk_size and current:
+            chunks.append("".join(current))
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += len(line)
+
+    if current:
+        chunks.append("".join(current))
+
+    return chunks
 
 
 def parse_file(
@@ -125,7 +178,6 @@ def parse_file(
         text = _xls_to_text(file_bytes)
     elif extracted_text:
         text = extracted_text
-        # Write debug file
         lines = text.splitlines()
         with open(PDF_DEBUG_PATH, "w", encoding="utf-8") as f:
             f.write("\n".join(lines[:50]))
@@ -137,8 +189,13 @@ def parse_file(
 
     print(f"Texto enviado a Claude (primeros 300 chars): {text[:300]}")
 
-    try:
-        return _call_claude(text)
-    except (json.JSONDecodeError, ValueError, KeyError):
-        print("Primer intento fallido, reintentando...")
-        return _call_claude(text)
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    chunks = _split_chunks(text)
+    print(f"Total chunks: {len(chunks)}")
+
+    all_transactions: List[Transaction] = []
+    for i, chunk in enumerate(chunks):
+        print(f"Procesando chunk {i + 1}/{len(chunks)} ({len(chunk)} chars)")
+        all_transactions.extend(_call_claude_chunk(client, chunk))
+
+    return all_transactions

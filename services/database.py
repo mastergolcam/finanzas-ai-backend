@@ -22,16 +22,27 @@ def get_client() -> Client:
     return _client
 
 
-def _get_category_id(client: Client, category_name: str) -> Optional[str]:
-    result = (
-        client.table("categories")
-        .select("id")
-        .eq("name", category_name)
-        .limit(1)
-        .execute()
-    )
-    if result.data:
-        return result.data[0]["id"]
+def _build_category_map(client: Client, user_id: str) -> dict:
+    result = client.table("categories").select("id,name").eq("user_id", user_id).execute()
+    return {c["name"].lower(): c["id"] for c in result.data}
+
+
+def _resolve_category_id(cat_map: dict, categoria: Optional[str]) -> Optional[str]:
+    if not categoria:
+        return None
+
+    cat_lower = categoria.lower()
+
+    # Exact match
+    category_id = cat_map.get(cat_lower)
+    if category_id:
+        return category_id
+
+    # Partial match fallback
+    for cat_name, cat_id in cat_map.items():
+        if cat_name in cat_lower or cat_lower in cat_name:
+            return cat_id
+
     return None
 
 
@@ -41,16 +52,10 @@ def save_transactions(
     source_file: str,
 ) -> List[dict]:
     client = get_client()
-
-    # Cache category lookups to avoid N+1 queries
-    category_cache: dict = {}
+    cat_map = _build_category_map(client, user_id)
 
     rows = []
     for t in transactions:
-        cat_name = t.categoria or "Otros"
-        if cat_name not in category_cache:
-            category_cache[cat_name] = _get_category_id(client, cat_name)
-
         row = {
             "user_id": user_id,
             "account_id": None,
@@ -58,7 +63,7 @@ def save_transactions(
             "description": t.descripcion,
             "amount": float(t.monto),
             "type": t.tipo.value,
-            "category_id": category_cache[cat_name],
+            "category_id": _resolve_category_id(cat_map, t.categoria),
             "source_file": source_file,
             "month": int(t.fecha.month) if t.fecha else None,
             "year": int(t.fecha.year) if t.fecha else None,

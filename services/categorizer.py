@@ -11,19 +11,33 @@ from models.schemas import Transaction
 load_dotenv()
 
 CATEGORIES = [
-    "Alimentación",
     "Transporte",
+    "Gasolina",
+    "Restaurantes",
+    "Supermercado",
+    "Droguería / Salud",
+    "Medicina Prepagada",
+    "Suscripciones Digitales",
     "Entretenimiento",
-    "Salud",
+    "Ropa / Moda",
+    "Ropa Deportiva",
     "Educación",
-    "Vivienda",
-    "Servicios públicos",
-    "Ropa y accesorios",
-    "Tecnología",
-    "Ingresos",
-    "Transferencias",
+    "Educación Digital",
+    "Hogar",
+    "Cuidado Personal",
+    "Perfumería / Cosméticos",
+    "Viajes / Vacaciones",
+    "Vehículo / Mecánica",
+    "Parqueaderos",
+    "Salud / Bienestar",
+    "Recreación Hijos",
+    "Gastos Notariales / Legales",
+    "Seguros",
+    "Telefonía / Internet",
+    "Domicilios / Delivery",
+    "Empresa (Reembolsable)",
     "Impuestos / Comisiones Bancarias",
-    "Otros",
+    "Compras Sin Detalle",
 ]
 
 BATCH_SIZE = 50  # Max transactions per Claude request
@@ -63,12 +77,15 @@ Transacciones a categorizar (en orden):
 
 Reglas:
 - Asigna exactamente una categoría por transacción, en el mismo orden.
-- Usa "Ingresos" para salarios, transferencias recibidas, reembolsos.
-- Usa "Transferencias" para movimientos entre cuentas propias.
-- Usa "Otros" cuando no encaje en ninguna categoría anterior.
-- Responde ÚNICAMENTE con un JSON array de strings. Sin explicaciones. Sin markdown.
+- Usa "Restaurantes" para comidas, cafeterías, domicilios de comida.
+- Usa "Domicilios / Delivery" para Rappi, iFood, servicios de entrega.
+- Usa "Suscripciones Digitales" para Netflix, Spotify, apps, software.
+- Usa "Telefonía / Internet" para planes de celular, internet, TV.
+- Usa "Impuestos / Comisiones Bancarias" para GMF, comisiones, cargos bancarios.
+- Usa "Compras Sin Detalle" cuando no hay información suficiente para categorizar.
+- Responde ÚNICAMENTE con un JSON array de strings con el campo "categoria". Sin explicaciones. Sin markdown.
 
-Ejemplo de respuesta: ["Alimentación", "Transporte", "Ingresos"]"""
+Ejemplo de respuesta: ["Restaurantes", "Transporte", "Suscripciones Digitales"]"""
 
     message = client.messages.create(
         model="claude-sonnet-4-6",

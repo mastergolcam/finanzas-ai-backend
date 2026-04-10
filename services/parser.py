@@ -25,7 +25,8 @@ Formato exacto:
     "date": "YYYY-MM-DD",
     "description": "descripción del comercio o transacción",
     "amount": 12345.67,
-    "type": "debit"
+    "type": "debit",
+    "category": "Restaurantes"
   }}
 ]
 
@@ -34,8 +35,17 @@ Reglas estrictas:
 - description: nombre del comercio o descripción limpia
 - amount: siempre número positivo, sin símbolos de moneda
 - type: "debit" para gastos, compras, retiros | "credit" para pagos, abonos, ingresos
+- category: usa exactamente uno de estos nombres:
+  Transporte, Gasolina, Restaurantes, Supermercado, Droguería / Salud,
+  Medicina Prepagada, Suscripciones Digitales, Entretenimiento,
+  Ropa / Moda, Ropa Deportiva, Educación, Educación Digital, Hogar,
+  Cuidado Personal, Perfumería / Cosméticos, Viajes / Vacaciones,
+  Vehículo / Mecánica, Parqueaderos, Salud / Bienestar,
+  Recreación Hijos, Gastos Notariales / Legales, Seguros,
+  Telefonía / Internet, Domicilios / Delivery, Empresa (Reembolsable),
+  Impuestos / Comisiones Bancarias, Compras Sin Detalle
 - Ignorar: filas de saldo, totales, encabezados, intereses bancarios
-- Incluir: GMF 4x1000 como debit con description "GMF 4x1000"
+- Incluir: GMF 4x1000 como debit, description "GMF 4x1000", category "Impuestos / Comisiones Bancarias"
 - NO incluir pagos a la tarjeta de crédito como gastos
 
 Extracto bancario a analizar:
@@ -111,12 +121,17 @@ def _items_to_transactions(items: List[dict]) -> List[Transaction]:
         if monto <= 0:
             continue
 
+        categoria = item.get("category") or item.get("categoria") or None
+        if categoria:
+            categoria = str(categoria).strip() or None
+
         transactions.append(
             Transaction(
                 fecha=fecha,
                 descripcion=str(item.get("description", "")).strip(),
                 monto=monto,
                 tipo=tipo,
+                categoria=categoria,
             )
         )
     return transactions

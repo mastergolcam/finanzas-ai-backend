@@ -32,7 +32,7 @@ def categorize_transactions(transactions: List[Transaction]) -> List[Transaction
     if not transactions:
         return transactions
 
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     all_categories: List[str] = []
 
     for i in range(0, len(transactions), BATCH_SIZE):

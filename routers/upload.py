@@ -7,8 +7,7 @@ from fastapi.responses import PlainTextResponse
 from models.schemas import UploadResponse
 from services.categorizer import categorize_transactions
 from services.database import save_transactions
-from services.parser import parse_pdf, parse_xls, PDF_DEBUG_PATH
-from services.parser import _parse_global66, _parse_nu
+from services.parser import parse_file, PDF_DEBUG_PATH
 
 router = APIRouter()
 
@@ -50,16 +49,7 @@ async def upload_statement(
         raise HTTPException(status_code=400, detail="El archivo está vacío.")
 
     try:
-        if ext in (".xls", ".xlsx"):
-            transactions = parse_xls(file_bytes)
-        elif ext == ".pdf" and extracted_text:
-            text_lower = extracted_text.lower()
-            if "global66" in text_lower or "movimientos de cuenta en cop" in text_lower:
-                transactions = _parse_global66(extracted_text)
-            else:
-                transactions = _parse_nu(extracted_text)
-        else:
-            transactions = parse_pdf(file_bytes)
+        transactions = parse_file(file_bytes, filename, extracted_text)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Error al parsear el archivo: {str(e)}")
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
 from models.schemas import UploadResponse
 from services.categorizer import categorize_transactions
@@ -8,11 +8,13 @@ from services.parser import parse_pdf, parse_xls
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".pdf"}
-TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_statement(file: UploadFile = File(...)):
+async def upload_statement(request: Request, file: UploadFile = File(...)):
+    user_id = request.headers.get("x-user-id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id requerido")
     filename = file.filename or ""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
@@ -48,7 +50,7 @@ async def upload_statement(file: UploadFile = File(...)):
     try:
         save_transactions(
             transactions=transactions,
-            user_id=TEST_USER_ID,
+            user_id=user_id,
             source_file=filename,
         )
     except Exception as e:

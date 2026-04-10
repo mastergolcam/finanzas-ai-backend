@@ -1,0 +1,46 @@
+from fastapi import APIRouter, HTTPException, UploadFile, File
+
+from models.schemas import UploadResponse
+from services.categorizer import categorize_transactions
+from services.parser import parse_pdf, parse_xls
+
+router = APIRouter()
+
+ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".pdf"}
+
+
+@router.post("/upload", response_model=UploadResponse)
+async def upload_statement(file: UploadFile = File(...)):
+    filename = file.filename or ""
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato no soportado '{ext}'. Use XLS, XLSX o PDF.",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="El archivo está vacío.")
+
+    try:
+        if ext in (".xls", ".xlsx"):
+            transactions = parse_xls(file_bytes)
+        else:
+            transactions = parse_pdf(file_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Error al parsear el archivo: {str(e)}")
+
+    if not transactions:
+        raise HTTPException(
+            status_code=422,
+            detail="No se encontraron transacciones en el archivo. Verifique el formato.",
+        )
+
+    try:
+        transactions = categorize_transactions(transactions)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Error al categorizar con Claude: {str(e)}")
+
+    return UploadResponse(total=len(transactions), transactions=transactions)

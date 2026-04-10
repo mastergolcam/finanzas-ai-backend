@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -53,18 +54,203 @@ Extracto bancario a analizar:
 """
 
 
-def _xls_to_text(file_bytes: bytes) -> str:
+# ---------------------------------------------------------------------------
+# XLS/XLSX parsing with pandas (no Claude)
+# ---------------------------------------------------------------------------
+
+def _find_header_row(df: pd.DataFrame) -> int:
+    """Return the row index that looks like a column-header row."""
+    header_keywords = {
+        "fecha", "date", "descripcion", "concepto", "valor", "monto",
+        "debito", "credito", "cargo", "abono", "detalle", "importe",
+        "transaccion", "movimiento", "referencia",
+    }
+    for idx in range(min(20, len(df))):
+        row = df.iloc[idx]
+        matches = 0
+        for v in row:
+            if pd.notna(v):
+                cell = str(v).lower().strip()
+                if any(kw in cell for kw in header_keywords):
+                    matches += 1
+        if matches >= 2:
+            return idx
+    return 0
+
+
+def _find_col(columns: List[str], keywords: List[str]) -> Optional[str]:
+    """Return the first column name that contains any of the keywords."""
+    for col in columns:
+        col_lower = col.lower()
+        for kw in keywords:
+            if kw in col_lower:
+                return col
+    return None
+
+
+def _safe_float(value) -> float:
+    """Convert a spreadsheet cell to float, handling Spanish/English formats."""
+    if value is None:
+        return 0.0
     try:
-        df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
-    except Exception:
-        df = pd.read_excel(io.BytesIO(file_bytes), engine="xlrd")
+        if pd.isna(value):
+            return 0.0
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (int, float)):
+        v = float(value)
+        return 0.0 if v != v else v  # guard NaN
+    s = str(value).strip()
+    if not s or s.lower() in ("nan", "none", ""):
+        return 0.0
+    negative = s.startswith("(") and s.endswith(")")
+    s = s.strip("()")
+    s = re.sub(r"[^\d.,\-]", "", s)
+    if not s:
+        return 0.0
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")  # Spanish: 1.234,56
+        else:
+            s = s.replace(",", "")                    # English:  1,234.56
+    elif "," in s:
+        parts = s.split(",")
+        if len(parts) == 2 and len(parts[-1]) <= 2:
+            s = s.replace(",", ".")   # decimal comma
+        else:
+            s = s.replace(",", "")    # thousands comma
+    try:
+        result = float(s)
+        return -result if negative else result
+    except ValueError:
+        return 0.0
 
+
+def _safe_date(value) -> Optional[date]:
+    """Convert a spreadsheet cell to a date object."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.date()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if not s or s.lower() in ("nan", "none", ""):
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_xls(file_bytes: bytes) -> List[Transaction]:
+    """Parse XLS/XLSX directly with pandas — Claude is NOT used here."""
+    engines = ["openpyxl", "xlrd"]
+
+    # First pass: read everything as strings to locate the header row
+    raw = None
+    for engine in engines:
+        try:
+            raw = pd.read_excel(io.BytesIO(file_bytes), engine=engine, header=None, dtype=str)
+            break
+        except Exception:
+            continue
+
+    if raw is None or raw.empty:
+        print("[XLS] Could not read file with any engine")
+        return []
+
+    header_idx = _find_header_row(raw)
+    print(f"[XLS] Header row detected at index {header_idx}")
+
+    # Second pass: read with correct header so pandas parses dates/numbers
+    df = None
+    for engine in engines:
+        try:
+            df = pd.read_excel(io.BytesIO(file_bytes), engine=engine, header=header_idx)
+            break
+        except Exception:
+            continue
+
+    if df is None or df.empty:
+        return []
+
+    df.columns = [str(c).strip() for c in df.columns]
     df = df.dropna(how="all")
-    lines = ["\t".join(str(v) for v in df.columns)]
-    for _, row in df.iterrows():
-        lines.append("\t".join(str(v) for v in row))
-    return "\n".join(lines)
+    cols = list(df.columns)
+    print(f"[XLS] Columns: {cols}")
 
+    date_col = _find_col(cols, ["fecha", "date", "f.valor", "f.proceso", "f.transaccion"])
+    desc_col = _find_col(cols, ["descripcion", "concepto", "detalle", "description", "referencia", "oficina", "nombre"])
+    debit_col = _find_col(cols, ["debito", "cargo", "egreso", "retiro", "salida"])
+    credit_col = _find_col(cols, ["credito", "abono", "ingreso", "deposito", "entrada"])
+    amount_col = _find_col(cols, ["valor", "monto", "importe", "amount"])
+
+    if not date_col:
+        print("[XLS] No date column found")
+        return []
+    if not desc_col:
+        print("[XLS] No description column found")
+        return []
+
+    print(f"[XLS] date={date_col}, desc={desc_col}, debit={debit_col}, credit={credit_col}, amount={amount_col}")
+
+    transactions: List[Transaction] = []
+    for _, row in df.iterrows():
+        fecha = _safe_date(row.get(date_col))
+        if not fecha:
+            continue
+
+        desc = str(row.get(desc_col, "")).strip()
+        if not desc or desc.lower() in ("nan", "none", ""):
+            continue
+
+        if debit_col and credit_col:
+            debit_val = abs(_safe_float(row.get(debit_col, 0)))
+            credit_val = abs(_safe_float(row.get(credit_col, 0)))
+            if debit_val > 0:
+                monto, tipo = debit_val, TransactionType.debit
+            elif credit_val > 0:
+                monto, tipo = credit_val, TransactionType.credit
+            else:
+                continue
+        elif amount_col:
+            raw_amount = _safe_float(row.get(amount_col, 0))
+            if raw_amount == 0:
+                continue
+            if raw_amount < 0:
+                monto, tipo = abs(raw_amount), TransactionType.credit
+            else:
+                monto, tipo = raw_amount, TransactionType.debit
+        else:
+            continue
+
+        transactions.append(
+            Transaction(
+                fecha=fecha,
+                descripcion=desc,
+                monto=monto,
+                tipo=tipo,
+                categoria=None,
+            )
+        )
+
+    print(f"[XLS] Extracted {len(transactions)} transactions with pandas")
+    return transactions
+
+
+# ---------------------------------------------------------------------------
+# PDF helpers
+# ---------------------------------------------------------------------------
 
 def _pdf_to_text(file_bytes: bytes) -> str:
     page_texts = []
@@ -90,7 +276,6 @@ def _parse_claude_response(raw: str) -> List[dict]:
         pass
 
     # 3. Extract array with regex fallback
-    import re
     match = re.search(r"\[.*\]", cleaned, re.DOTALL)
     if match:
         try:
@@ -189,18 +374,19 @@ def parse_file(
 ) -> List[Transaction]:
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
+    # XLS/XLSX: parse directly with pandas — Claude is used only for categorization
     if ext in (".xls", ".xlsx"):
-        text = _xls_to_text(file_bytes)
-    elif extracted_text:
+        return _parse_xls(file_bytes)
+
+    # PDF: convert to text then send to Claude for parsing
+    if extracted_text:
         text = extracted_text
-        lines = text.splitlines()
-        with open(PDF_DEBUG_PATH, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines[:50]))
     else:
         text = _pdf_to_text(file_bytes)
-        lines = text.splitlines()
-        with open(PDF_DEBUG_PATH, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines[:50]))
+
+    lines = text.splitlines()
+    with open(PDF_DEBUG_PATH, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines[:50]))
 
     print(f"Texto enviado a Claude (primeros 300 chars): {text[:300]}")
 

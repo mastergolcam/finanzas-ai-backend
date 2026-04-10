@@ -439,13 +439,21 @@ PDF_DEBUG_PATH = "/tmp/pdf_debug.txt"
 
 
 def parse_pdf(file_bytes: bytes) -> List[Transaction]:
+    page_texts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        full_text = "\n".join(
-            page.extract_text() or "" for page in pdf.pages
-        )
+        for i, page in enumerate(pdf.pages):
+            page_text = page.extract_text() or ""
+            print(f"PAGINA {i}: {page_text[:200]}")
+            page_texts.append(page_text)
+
+    full_text = "\n".join(page_texts)
+
+    lines = full_text.splitlines()
+    print(f"TOTAL LINEAS: {len(lines)}")
+    for line in lines:
+        print(f"LINEA: {repr(line)}")
 
     # Write first 50 lines to debug file
-    lines = full_text.splitlines()
     debug_content = "\n".join(lines[:50])
     with open(PDF_DEBUG_PATH, "w", encoding="utf-8") as f:
         f.write(debug_content)

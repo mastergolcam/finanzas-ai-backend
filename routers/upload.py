@@ -1,14 +1,18 @@
 import os
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import PlainTextResponse
 
 from models.schemas import UploadResponse
 from services.categorizer import categorize_transactions
 from services.database import save_transactions
 from services.parser import parse_pdf, parse_xls, PDF_DEBUG_PATH
+from services.parser import _parse_global66, _parse_nu
 
 router = APIRouter()
+
+ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".pdf"}
 
 
 @router.get("/debug-pdf", response_class=PlainTextResponse)
@@ -18,14 +22,20 @@ async def debug_pdf():
     with open(PDF_DEBUG_PATH, "r", encoding="utf-8") as f:
         return f.read()
 
-ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".pdf"}
-
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_statement(request: Request, file: UploadFile = File(...)):
+async def upload_statement(
+    request: Request,
+    file: UploadFile = File(...),
+    extracted_text: Optional[str] = Form(None),
+):
     user_id = request.headers.get("x-user-id")
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id requerido")
+
+    print(f"extracted_text recibido: {bool(extracted_text)}")
+    print(f"primeros 200 chars: {extracted_text[:200] if extracted_text else 'NONE'}")
+
     filename = file.filename or ""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
@@ -42,6 +52,12 @@ async def upload_statement(request: Request, file: UploadFile = File(...)):
     try:
         if ext in (".xls", ".xlsx"):
             transactions = parse_xls(file_bytes)
+        elif ext == ".pdf" and extracted_text:
+            text_lower = extracted_text.lower()
+            if "global66" in text_lower or "movimientos de cuenta en cop" in text_lower:
+                transactions = _parse_global66(extracted_text)
+            else:
+                transactions = _parse_nu(extracted_text)
         else:
             transactions = parse_pdf(file_bytes)
     except Exception as e:

@@ -32,7 +32,9 @@ def categorize_transactions(transactions: List[Transaction]) -> List[Transaction
     if not transactions:
         return transactions
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    client = anthropic.Anthropic(api_key=api_key)
+    print(f"API Key loaded: {api_key[:10] if api_key else 'NOT FOUND'}")
     all_categories: List[str] = []
 
     for i in range(0, len(transactions), BATCH_SIZE):
@@ -68,7 +70,7 @@ Reglas:
 Ejemplo de respuesta: ["Alimentación", "Transporte", "Ingresos"]"""
 
     message = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )

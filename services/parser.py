@@ -166,21 +166,19 @@ def _detect_bank(full_text: str) -> str:
 # PDF — Global66
 # ---------------------------------------------------------------------------
 
-# Line format: "YYYY-MM-DD HH:MM:SS <descripción> <mov_num> <card_suffix> $monto $saldo"
-# Card suffix for purchases is "7865". GMF lines have no card suffix.
-_GLOBAL66_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
-_GLOBAL66_AMOUNTS = re.compile(r"\$[\d.,]+")
+_GLOBAL66_ROW = re.compile(
+    r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\s+(.+?)\s+(\d{7,})\s+(7865\s+)?(\$[\d,.]+)\s+\$[\d,.]+$",
+    re.MULTILINE,
+)
 
 
 def _clean_amount(raw: str) -> float:
-    """Convert '$1.234.567' or '$249,900' to float."""
     digits = raw.replace("$", "").strip()
-    # If both separators present: dots are thousands, comma is decimal
-    if "." in digits and "," in digits:
+    # Dots are thousands separators; optional comma as decimal
+    if "," in digits:
         digits = digits.replace(".", "").replace(",", ".")
     else:
-        # Single separator used as thousands (Colombian format: 249.900 or 249,900)
-        digits = digits.replace(".", "").replace(",", "")
+        digits = digits.replace(".", "")
     try:
         return float(digits)
     except ValueError:
@@ -190,45 +188,39 @@ def _clean_amount(raw: str) -> float:
 def _parse_global66(full_text: str) -> List[Transaction]:
     transactions = []
 
-    print(f"Texto crudo primeros 500 chars: {full_text[:500]}")
-    lines = full_text.splitlines()
-    print(f"Total líneas extraídas: {len(lines)}")
-    print(f"Primeras 5 líneas: {lines[:5]}")
+    for m in _GLOBAL66_ROW.finditer(full_text):
+        fecha_str = m.group(1)
+        descripcion = m.group(2).strip()
+        monto_raw = m.group(5)
+        has_card = m.group(4) is not None  # "7865 " present
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Must start with a date
-        if not _GLOBAL66_DATE.match(line):
-            continue
-
-        print(f"Procesando línea: {line}")
-
-        fecha_str = line[:10]
-        fecha = _parse_date(fecha_str)
-
-        # Rest of the line after "YYYY-MM-DD HH:MM:SS "
-        rest = line[20:].strip()  # skip datetime (19 chars) + space
-        desc_lower = rest.lower()
+        desc_lower = descripcion.lower()
 
         # --- Ignore rules ---
         if any(ign in desc_lower for ign in GLOBAL66_IGNORE):
             continue
-
-        # Extract all $ amounts from the line; last one is always saldo
-        amounts = _GLOBAL66_AMOUNTS.findall(line)
-        if not amounts:
+        if descripcion.strip().lower() == "débito":
             continue
-        # Monto is the first $ value; saldo is the last
-        monto = _clean_amount(amounts[0])
+
+        monto = _clean_amount(monto_raw)
         if monto == 0:
             continue
 
+        fecha = _parse_date(fecha_str)
+
         # --- GMF / comisiones ---
-        if any(kw in desc_lower for kw in GLOBAL66_COMISION_KEYWORDS):
-            descripcion = "GMF 4x1000" if ("gmf" in desc_lower or "4x1.000" in desc_lower) else rest.split("$")[0].strip()
+        if "gmf" in desc_lower or "4x1.000" in desc_lower:
+            transactions.append(
+                Transaction(
+                    fecha=fecha,
+                    descripcion="GMF 4x1000",
+                    monto=monto,
+                    tipo=TransactionType.debit,
+                    categoria="Impuestos / Comisiones Bancarias",
+                )
+            )
+            continue
+        if "comisión" in desc_lower or "comision" in desc_lower:
             transactions.append(
                 Transaction(
                     fecha=fecha,
@@ -240,21 +232,8 @@ def _parse_global66(full_text: str) -> List[Transaction]:
             )
             continue
 
-        # --- Extract description: text before the movement number ---
-        # Movement number is a 6+ digit sequence after the description
-        mov_match = re.search(r"\s(\d{6,})\s", rest)
-        if mov_match:
-            descripcion = rest[: mov_match.start()].strip()
-        else:
-            # Fallback: everything before the first $
-            descripcion = rest.split("$")[0].strip()
-
-        if not descripcion:
-            continue
-
         # --- Determine type ---
-        # "7865" suffix identifies card purchases → debit
-        tipo = TransactionType.debit if "7865" in line else TransactionType.credit
+        tipo = TransactionType.debit if has_card else TransactionType.credit
 
         categoria = None
         if any(kw in desc_lower for kw in PAGO_TC_KEYWORDS):

@@ -49,7 +49,6 @@ async def upload_statement(file: UploadFile = File(...)):
         save_transactions(
             transactions=transactions,
             user_id=TEST_USER_ID,
-            account_name="default",
             source_file=filename,
         )
     except Exception as e:

@@ -38,7 +38,6 @@ def _get_category_id(client: Client, category_name: str) -> Optional[str]:
 def save_transactions(
     transactions: List[Transaction],
     user_id: str,
-    account_name: str,
     source_file: str,
 ) -> List[dict]:
     client = get_client()
@@ -52,17 +51,19 @@ def save_transactions(
         if cat_name not in category_cache:
             category_cache[cat_name] = _get_category_id(client, cat_name)
 
+        tipo = "credit" if "cr" in t.tipo.value.lower() else "debit"
+
         row = {
             "user_id": user_id,
-            "date": t.fecha.isoformat() if t.fecha else None,
+            "account_id": None,
+            "date": t.fecha.strftime("%Y-%m-%d") if t.fecha else None,
             "description": t.descripcion,
-            "amount": t.monto,
-            "type": t.tipo.value,
+            "amount": float(t.monto),
+            "type": tipo,
             "category_id": category_cache[cat_name],
             "source_file": source_file,
-            "month": t.fecha.month if t.fecha else None,
-            "year": t.fecha.year if t.fecha else None,
-            "account_name": account_name,
+            "month": int(t.fecha.month) if t.fecha else None,
+            "year": int(t.fecha.year) if t.fecha else None,
         }
         rows.append(row)
 

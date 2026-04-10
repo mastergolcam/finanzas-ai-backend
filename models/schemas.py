@@ -5,8 +5,8 @@ from enum import Enum
 
 
 class TransactionType(str, Enum):
-    debit = "débito"
-    credit = "crédito"
+    debit = "debit"
+    credit = "credit"
 
 
 class Transaction(BaseModel):

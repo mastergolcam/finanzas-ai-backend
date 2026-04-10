@@ -51,15 +51,13 @@ def save_transactions(
         if cat_name not in category_cache:
             category_cache[cat_name] = _get_category_id(client, cat_name)
 
-        tipo = "credit" if "cr" in t.tipo.value.lower() else "debit"
-
         row = {
             "user_id": user_id,
             "account_id": None,
             "date": t.fecha.strftime("%Y-%m-%d") if t.fecha else None,
             "description": t.descripcion,
             "amount": float(t.monto),
-            "type": tipo,
+            "type": t.tipo.value,
             "category_id": category_cache[cat_name],
             "source_file": source_file,
             "month": int(t.fecha.month) if t.fecha else None,

@@ -19,8 +19,11 @@ TYPE_ALIASES = {"tipo", "type", "movimiento", "operacion", "operación"}
 
 PAGO_TC_KEYWORDS = ("pago a la tarjeta", "gracias por su pago")
 
-# Global66: rows to ignore
-GLOBAL66_IGNORE = ("gmf", "4x1.000", "intereses abonados", "conversión de divisas", "debito sin descripcion")
+# Global66: rows to ignore entirely
+GLOBAL66_IGNORE = ("intereses abonados", "conversión de divisas", "debito sin descripcion")
+
+# Global66: rows to include as "Impuestos / Comisiones Bancarias"
+GLOBAL66_COMISION_KEYWORDS = ("gmf", "4x1.000", "comisión", "comision")
 
 # Nu: rows to ignore
 NU_IGNORE_KEYWORDS = ("gracias por tu pago",)
@@ -200,8 +203,9 @@ def _parse_global66(full_text: str) -> List[Transaction]:
         fecha_str, descripcion, _, _, amount_col_val, _ = m.groups()
         descripcion = descripcion.strip()
 
-        # Skip ignored rows
         desc_lower = descripcion.lower()
+
+        # Skip rows ignored entirely
         if any(ign in desc_lower for ign in GLOBAL66_IGNORE):
             continue
 
@@ -210,11 +214,21 @@ def _parse_global66(full_text: str) -> List[Transaction]:
         if monto == 0:
             continue
 
-        # The single monetary value shown is either the debit or the abono.
-        # Global66 PDFs typically show only one of the two per row.
-        # We infer type from the header column order and whether the value
-        # appears in the debit or abono position.
-        # Simpler heuristic: if description looks like a payment/abono → credit.
+        # GMF / comisiones → debit con categoría fija
+        if any(kw in desc_lower for kw in GLOBAL66_COMISION_KEYWORDS):
+            descripcion = "GMF 4x1000" if "gmf" in desc_lower or "4x1.000" in desc_lower else descripcion
+            transactions.append(
+                Transaction(
+                    fecha=fecha,
+                    descripcion=descripcion,
+                    monto=monto,
+                    tipo=TransactionType.debit,
+                    categoria="Impuestos / Comisiones Bancarias",
+                )
+            )
+            continue
+
+        # Infer debit/credit from description keywords
         abono_keywords = ("abono", "transferencia recibida", "pago recibido", "recarga")
         tipo = (
             TransactionType.credit

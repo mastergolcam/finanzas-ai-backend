@@ -22,6 +22,7 @@ CATEGORIES = [
     "Tecnología",
     "Ingresos",
     "Transferencias",
+    "Impuestos / Comisiones Bancarias",
     "Otros",
 ]
 

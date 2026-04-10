@@ -166,53 +166,83 @@ def _detect_bank(full_text: str) -> str:
 # PDF — Global66
 # ---------------------------------------------------------------------------
 
+_GLOBAL66_FLAT = re.compile(
+    r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\s+([\w\s*]+?)\s+(\d{7,8})\s+(7865\s+)?(\$[\d,.]+)\s+\$[\d,.]+"
+)
+
+_GLOBAL66_SKIP = ["Intereses abonados", "Conversión de divisas", "Abono ", "Totales", "Desde:", "Hasta:"]
+
+
+def _process_global66_match(fecha_str: str, descripcion: str, has_card: bool, monto_str: str) -> Optional[Transaction]:
+    if any(w in descripcion for w in _GLOBAL66_SKIP):
+        return None
+    if descripcion.strip().lower() == "débito":
+        return None
+
+    monto = float(monto_str.replace("$", "").replace(".", "").replace(",", "."))
+    if monto == 0:
+        return None
+
+    fecha = _parse_date(fecha_str)
+
+    if "GMF" in descripcion:
+        return Transaction(fecha=fecha, descripcion=descripcion, monto=monto,
+                           tipo=TransactionType.debit, categoria="Impuestos / Comisiones Bancarias")
+    if "comisión" in descripcion.lower() or "comision" in descripcion.lower():
+        return Transaction(fecha=fecha, descripcion=descripcion, monto=monto,
+                           tipo=TransactionType.debit, categoria="Impuestos / Comisiones Bancarias")
+    if has_card:
+        return Transaction(fecha=fecha, descripcion=descripcion, monto=monto,
+                           tipo=TransactionType.debit, categoria=None)
+    return None
+
+
 def _parse_global66(full_text: str) -> List[Transaction]:
     transactions = []
 
-    skip_words = ["Intereses abonados", "Conversión de divisas", "Abono ", "Totales", "Desde:", "Hasta:"]
+    lines = full_text.split("\n")
+    print(f"Líneas tras split: {len(lines)}")
 
-    for line in full_text.split("\n"):
-        line = line.strip()
+    if len(lines) >= 5:
+        # Normal mode: one transaction per line
+        for line in lines:
+            line = line.strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}", line):
+                continue
+            if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} Débito \d+", line):
+                continue
 
-        if not re.match(r"^\d{4}-\d{2}-\d{2}", line):
-            continue
+            montos = re.findall(r"\$[\d,.]+", line)
+            if len(montos) < 2:
+                continue
 
-        if any(w in line for w in skip_words):
-            continue
+            desc_match = re.search(r"\d{2}:\d{2}:\d{2} (.+?) \d{7,}", line)
+            if not desc_match:
+                continue
 
-        # Ignore bare "Débito" lines with no merchant
-        if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} Débito \d+", line):
-            continue
-
-        fecha = _parse_date(line[:10])
-
-        montos = re.findall(r"\$[\d,.]+", line)
-        if len(montos) < 2:
-            continue
-
-        monto_str = montos[0]
-        monto = float(monto_str.replace("$", "").replace(".", "").replace(",", "."))
-
-        desc_match = re.search(r"\d{2}:\d{2}:\d{2} (.+?) \d{7,}", line)
-        if not desc_match:
-            continue
-        descripcion = desc_match.group(1).strip()
-
-        if "GMF" in descripcion:
-            tipo = TransactionType.debit
-            categoria: Optional[str] = "Impuestos / Comisiones Bancarias"
-        elif "comisión" in descripcion.lower() or "comision" in descripcion.lower():
-            tipo = TransactionType.debit
-            categoria = "Impuestos / Comisiones Bancarias"
-        elif "7865" in line:
-            tipo = TransactionType.debit
-            categoria = None
-        else:
-            continue
-
-        transaction = Transaction(fecha=fecha, descripcion=descripcion, monto=monto, tipo=tipo, categoria=categoria)
-        print(f"Transacción encontrada: {transaction}")
-        transactions.append(transaction)
+            t = _process_global66_match(
+                fecha_str=line[:10],
+                descripcion=desc_match.group(1).strip(),
+                has_card="7865" in line,
+                monto_str=montos[0],
+            )
+            if t:
+                print(f"Transacción encontrada: {t}")
+                transactions.append(t)
+    else:
+        # Flat mode: all text in one line — use regex on the full string
+        matches = list(_GLOBAL66_FLAT.finditer(full_text))
+        print(f"MATCHES ENCONTRADOS: {len(matches)}")
+        for m in matches:
+            t = _process_global66_match(
+                fecha_str=m.group(1),
+                descripcion=m.group(2).strip(),
+                has_card=m.group(4) is not None,
+                monto_str=m.group(5),
+            )
+            if t:
+                print(f"Transacción encontrada: {t}")
+                transactions.append(t)
 
     return transactions
 

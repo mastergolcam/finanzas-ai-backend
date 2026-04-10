@@ -1,11 +1,22 @@
+import os
+
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi.responses import PlainTextResponse
 
 from models.schemas import UploadResponse
 from services.categorizer import categorize_transactions
 from services.database import save_transactions
-from services.parser import parse_pdf, parse_xls
+from services.parser import parse_pdf, parse_xls, PDF_DEBUG_PATH
 
 router = APIRouter()
+
+
+@router.get("/debug-pdf", response_class=PlainTextResponse)
+async def debug_pdf():
+    if not os.path.exists(PDF_DEBUG_PATH):
+        raise HTTPException(status_code=404, detail="No hay archivo de debug. Sube un PDF primero.")
+    with open(PDF_DEBUG_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 
 ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".pdf"}
 

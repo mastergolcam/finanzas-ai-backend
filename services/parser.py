@@ -166,57 +166,62 @@ def _detect_bank(full_text: str) -> str:
 # PDF — Global66
 # ---------------------------------------------------------------------------
 
-# Pattern: "2026-01-05 13:02:14  Compra en Homecenter chia  9671698  7865  $249,900  $9,236,492"
-# Groups:  date+time | description | mov_num | card_num | debit_or_abono | saldo
-# The debit/abono column may be missing (only one monetary value before saldo).
-# We detect debit vs credit by checking which monetary column has a value.
-_GLOBAL66_ROW = re.compile(
-    r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\s+"   # fecha datetime
-    r"(.+?)\s+"                                         # descripción
-    r"(\d{6,})\s+"                                      # número movimiento
-    r"(\d{3,})\s+"                                      # número tarjeta (parcial)
-    r"(\$[\d.,]+)\s+"                                   # débito o abono
-    r"(\$[\d.,]+)"                                      # saldo
-)
+# Line format: "YYYY-MM-DD HH:MM:SS <descripción> <mov_num> <card_suffix> $monto $saldo"
+# Card suffix for purchases is "7865". GMF lines have no card suffix.
+_GLOBAL66_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+_GLOBAL66_AMOUNTS = re.compile(r"\$[\d.,]+")
+
+
+def _clean_amount(raw: str) -> float:
+    """Convert '$1.234.567' or '$249,900' to float."""
+    digits = raw.replace("$", "").strip()
+    # If both separators present: dots are thousands, comma is decimal
+    if "." in digits and "," in digits:
+        digits = digits.replace(".", "").replace(",", ".")
+    else:
+        # Single separator used as thousands (Colombian format: 249.900 or 249,900)
+        digits = digits.replace(".", "").replace(",", "")
+    try:
+        return float(digits)
+    except ValueError:
+        return 0.0
+
 
 def _parse_global66(full_text: str) -> List[Transaction]:
     transactions = []
-
-    # Extract header line to determine column order (Débito / Abono)
-    # We look for the header row that contains both words
-    header_debit_first = True  # default: Débito comes before Abono
-    for line in full_text.splitlines():
-        ll = line.lower()
-        if "débito" in ll and "abono" in ll:
-            header_debit_first = ll.index("débito") < ll.index("abono")
-            break
 
     for line in full_text.splitlines():
         line = line.strip()
         if not line:
             continue
 
-        m = _GLOBAL66_ROW.search(line)
-        if not m:
+        # Must start with a date
+        if not _GLOBAL66_DATE.match(line):
             continue
 
-        fecha_str, descripcion, _, _, amount_col_val, _ = m.groups()
-        descripcion = descripcion.strip()
+        fecha_str = line[:10]
+        fecha = _parse_date(fecha_str)
 
-        desc_lower = descripcion.lower()
+        # Rest of the line after "YYYY-MM-DD HH:MM:SS "
+        rest = line[20:].strip()  # skip datetime (19 chars) + space
+        desc_lower = rest.lower()
 
-        # Skip rows ignored entirely
+        # --- Ignore rules ---
         if any(ign in desc_lower for ign in GLOBAL66_IGNORE):
             continue
 
-        fecha = _parse_date(fecha_str)
-        monto = abs(_parse_amount(amount_col_val))
+        # Extract all $ amounts from the line; last one is always saldo
+        amounts = _GLOBAL66_AMOUNTS.findall(line)
+        if not amounts:
+            continue
+        # Monto is the first $ value; saldo is the last
+        monto = _clean_amount(amounts[0])
         if monto == 0:
             continue
 
-        # GMF / comisiones → debit con categoría fija
+        # --- GMF / comisiones ---
         if any(kw in desc_lower for kw in GLOBAL66_COMISION_KEYWORDS):
-            descripcion = "GMF 4x1000" if "gmf" in desc_lower or "4x1.000" in desc_lower else descripcion
+            descripcion = "GMF 4x1000" if ("gmf" in desc_lower or "4x1.000" in desc_lower) else rest.split("$")[0].strip()
             transactions.append(
                 Transaction(
                     fecha=fecha,
@@ -228,13 +233,21 @@ def _parse_global66(full_text: str) -> List[Transaction]:
             )
             continue
 
-        # Infer debit/credit from description keywords
-        abono_keywords = ("abono", "transferencia recibida", "pago recibido", "recarga")
-        tipo = (
-            TransactionType.credit
-            if any(kw in desc_lower for kw in abono_keywords)
-            else TransactionType.debit
-        )
+        # --- Extract description: text before the movement number ---
+        # Movement number is a 6+ digit sequence after the description
+        mov_match = re.search(r"\s(\d{6,})\s", rest)
+        if mov_match:
+            descripcion = rest[: mov_match.start()].strip()
+        else:
+            # Fallback: everything before the first $
+            descripcion = rest.split("$")[0].strip()
+
+        if not descripcion:
+            continue
+
+        # --- Determine type ---
+        # "7865" suffix identifies card purchases → debit
+        tipo = TransactionType.debit if "7865" in line else TransactionType.credit
 
         categoria = None
         if any(kw in desc_lower for kw in PAGO_TC_KEYWORDS):

@@ -2,11 +2,13 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 
 from models.schemas import UploadResponse
 from services.categorizer import categorize_transactions
+from services.database import save_transactions
 from services.parser import parse_pdf, parse_xls
 
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".xls", ".xlsx", ".pdf"}
+TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -42,5 +44,15 @@ async def upload_statement(file: UploadFile = File(...)):
         transactions = categorize_transactions(transactions)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error al categorizar con Claude: {str(e)}")
+
+    try:
+        save_transactions(
+            transactions=transactions,
+            user_id=TEST_USER_ID,
+            account_name="default",
+            source_file=filename,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Error al guardar en Supabase: {str(e)}")
 
     return UploadResponse(total=len(transactions), transactions=transactions)

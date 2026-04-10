@@ -166,79 +166,49 @@ def _detect_bank(full_text: str) -> str:
 # PDF — Global66
 # ---------------------------------------------------------------------------
 
-_GLOBAL66_ROW = re.compile(
-    r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\s+(.+?)\s+(\d{7,})\s+(7865\s+)?(\$[\d,.]+)\s+\$[\d,.]+$",
-    re.MULTILINE,
-)
-
-
-def _clean_amount(raw: str) -> float:
-    digits = raw.replace("$", "").strip()
-    # Dots are thousands separators; optional comma as decimal
-    if "," in digits:
-        digits = digits.replace(".", "").replace(",", ".")
-    else:
-        digits = digits.replace(".", "")
-    try:
-        return float(digits)
-    except ValueError:
-        return 0.0
-
-
 def _parse_global66(full_text: str) -> List[Transaction]:
     transactions = []
 
-    for m in _GLOBAL66_ROW.finditer(full_text):
-        fecha_str = m.group(1)
-        descripcion = m.group(2).strip()
-        monto_raw = m.group(5)
-        has_card = m.group(4) is not None  # "7865 " present
+    skip_words = ["Intereses abonados", "Conversión de divisas", "Abono ", "Totales", "Desde:", "Hasta:"]
 
-        desc_lower = descripcion.lower()
+    for line in full_text.split("\n"):
+        line = line.strip()
 
-        # --- Ignore rules ---
-        if any(ign in desc_lower for ign in GLOBAL66_IGNORE):
-            continue
-        if descripcion.strip().lower() == "débito":
+        if not re.match(r"^\d{4}-\d{2}-\d{2}", line):
             continue
 
-        monto = _clean_amount(monto_raw)
-        if monto == 0:
+        if any(w in line for w in skip_words):
             continue
 
-        fecha = _parse_date(fecha_str)
-
-        # --- GMF / comisiones ---
-        if "gmf" in desc_lower or "4x1.000" in desc_lower:
-            transactions.append(
-                Transaction(
-                    fecha=fecha,
-                    descripcion="GMF 4x1000",
-                    monto=monto,
-                    tipo=TransactionType.debit,
-                    categoria="Impuestos / Comisiones Bancarias",
-                )
-            )
-            continue
-        if "comisión" in desc_lower or "comision" in desc_lower:
-            transactions.append(
-                Transaction(
-                    fecha=fecha,
-                    descripcion=descripcion,
-                    monto=monto,
-                    tipo=TransactionType.debit,
-                    categoria="Impuestos / Comisiones Bancarias",
-                )
-            )
+        # Ignore bare "Débito" lines with no merchant
+        if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} Débito \d+", line):
             continue
 
-        # --- Determine type ---
-        tipo = TransactionType.debit if has_card else TransactionType.credit
+        fecha = _parse_date(line[:10])
 
-        categoria = None
-        if any(kw in desc_lower for kw in PAGO_TC_KEYWORDS):
-            tipo = TransactionType.credit
-            categoria = "Pagos TC"
+        montos = re.findall(r"\$[\d,.]+", line)
+        if len(montos) < 2:
+            continue
+
+        monto_str = montos[0]
+        monto = float(monto_str.replace("$", "").replace(".", "").replace(",", "."))
+
+        desc_match = re.search(r"\d{2}:\d{2}:\d{2} (.+?) \d{7,}", line)
+        if not desc_match:
+            continue
+        descripcion = desc_match.group(1).strip()
+
+        if "GMF" in descripcion:
+            tipo = TransactionType.debit
+            categoria: Optional[str] = "Impuestos / Comisiones Bancarias"
+        elif "comisión" in descripcion.lower() or "comision" in descripcion.lower():
+            tipo = TransactionType.debit
+            categoria = "Impuestos / Comisiones Bancarias"
+        elif "7865" in line:
+            tipo = TransactionType.debit
+            categoria = None
+        else:
+            continue
 
         transaction = Transaction(fecha=fecha, descripcion=descripcion, monto=monto, tipo=tipo, categoria=categoria)
         print(f"Transacción encontrada: {transaction}")
